@@ -1,0 +1,17 @@
+{
+  "name": "gem-incremental-rare-roll-bot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Posts Gem Incremental rare rolls to a Discord channel via webhook.",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node bot.mjs",
+    "test": "node test/bot-test.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0"
+  }
+}

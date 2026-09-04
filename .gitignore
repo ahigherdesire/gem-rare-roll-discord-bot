@@ -1,0 +1,4 @@
+node_modules/
+.env
+.rare-roll-cursor.json
+*.log
