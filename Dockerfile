@@ -1,5 +1,7 @@
 # Rare-roll Discord bot — tiny always-on worker.
-FROM node:20-alpine
+# Node 22+ is required: @supabase/supabase-js relies on a native global
+# WebSocket, which only exists from Node 22 onward.
+FROM node:22-alpine
 
 WORKDIR /app
 

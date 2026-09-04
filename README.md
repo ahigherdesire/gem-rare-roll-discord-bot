@@ -33,7 +33,8 @@ any write path.
    npm install
    npm start
    ```
-   Requires Node 18+ (uses the built-in `fetch`).
+   Requires **Node 22+** (`@supabase/supabase-js` needs the native global
+   `WebSocket`, and the bot uses the built-in `fetch`).
 
 On first start (no saved cursor) the bot begins from the newest announcement, so
 it only reports rolls **going forward** — it won't replay the whole backlog. The
