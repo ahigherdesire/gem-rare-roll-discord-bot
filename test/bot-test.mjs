@@ -7,21 +7,22 @@ const bot = read("bot.mjs");
 const pkg = JSON.parse(read("package.json"));
 const envExample = read(".env.example");
 
-// ── Reads the same rare-roll feed the game uses ───────────────────────
-assert.match(bot, /\.from\("global_chat_announcements"\)/);
-for (const column of ["id", "player_id", "gem_name", "rarity", "effective_rarity", "mutation_ids", "luck_at_roll", "created_at"]) {
-  assert.match(bot, new RegExp(`\\b${column}\\b`), `bot must select ${column}`);
-}
-// Incremental cursor: only fetch rolls newer than the last posted id.
-assert.match(bot, /\.gt\("id", sinceId\)/);
-// Usernames + mutation names come from the same public RPCs as in-game chat.
-assert.match(bot, /rpc\("get_chat_profiles", \{ p_user_ids: ids \}\)/);
+// ── Reads the game's public rare-roll feed ────────────────────────────
+// One public RPC returns id + username + gem + rarity + effective_rarity
+// + mutations, so no table access or login is needed.
+assert.match(bot, /rpc\("get_rare_roll_chat_history", \{ p_limit: FEED_LIMIT \}\)/);
 assert.match(bot, /rpc\("get_public_mutation_catalog"\)/);
+for (const field of ["id", "username", "gem_name", "rarity", "effective_rarity", "mutation_ids", "base_luck", "created_at"]) {
+  assert.match(bot, new RegExp(`\\brow\\.${field}\\b`), `bot must use row.${field}`);
+}
+// Incremental cursor: only post rolls newer than the last posted id.
+assert.match(bot, /Number\(row\.id\) > sinceId/);
 
 // ── Read-only, least privilege ────────────────────────────────────────
-assert.match(bot, /signInAnonymously\(\)/);
+// No login needed, no service-role key, no writes, no direct table access.
 assert.doesNotMatch(bot, /service_role|SERVICE_ROLE/);
 assert.doesNotMatch(bot, /\.(insert|update|delete|upsert)\(/);
+assert.doesNotMatch(bot, /\.from\(/, "should read via public RPC, not tables");
 
 // ── Posts to a Discord webhook ────────────────────────────────────────
 assert.match(bot, /fetch\(DISCORD_WEBHOOK_URL/);
@@ -29,7 +30,7 @@ assert.match(bot, /embeds: \[embed\]/);
 assert.match(bot, /=== 429/);
 
 // ── First run doesn't replay the whole backlog ────────────────────────
-assert.match(bot, /if \(!lastId\)[\s\S]*latestAnnouncementId\(\)/);
+assert.match(bot, /if \(!lastId\)[\s\S]*latestRollId\(\)/);
 assert.match(bot, /oddsFor\(row\) >= minEffectiveRarity/);
 // On a failed post, the cursor must not skip the undelivered roll.
 assert.match(bot, /Failed to post roll[\s\S]*?return;/);
@@ -38,6 +39,7 @@ assert.match(bot, /Failed to post roll[\s\S]*?return;/);
 assert.equal(pkg.type, "module");
 assert.equal(pkg.scripts.start, "node bot.mjs");
 assert.ok(pkg.dependencies["@supabase/supabase-js"], "must depend on @supabase/supabase-js");
+assert.ok(pkg.dependencies["dotenv"], "must depend on dotenv to load .env");
 for (const key of ["SUPABASE_URL", "SUPABASE_ANON_KEY", "DISCORD_WEBHOOK_URL"]) {
   assert.match(envExample, new RegExp(`^${key}=`, "m"), `.env.example must document ${key}`);
 }

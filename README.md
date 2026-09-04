@@ -6,9 +6,10 @@ reports exactly the rolls the game already considers rare (big base rarity, or
 mutation-driven effective rarity over the announcement threshold).
 
 It is **read-only** and needs no Discord bot token — it posts through a channel
-**webhook**, and reads Supabase anonymously with the public anon key (the same
-values the website ships), signing in anonymously like the game client. It never
-uses the service-role key or any write path.
+**webhook**, and reads the game's public `get_rare_roll_chat_history` RPC with the
+public anon key (the same values the website ships). No login is required; that
+RPC already returns the roller's username. It never uses the service-role key or
+any write path.
 
 ## Setup
 
@@ -57,8 +58,9 @@ It's a plain long-running Node process. Any of these work:
 
 ## Notes
 
-- Usernames come from the public `get_chat_profiles` RPC and mutation names from
-  `get_public_mutation_catalog` — the same sources the in-game chat uses.
+- Rolls (with usernames) come from the public `get_rare_roll_chat_history` RPC and
+  mutation names from `get_public_mutation_catalog` — the same sources the in-game
+  chat uses.
 - Everything it posts (username, gem, odds) is already public in the game's
   global rare-roll chat.
 - Prefer a full gateway bot (slash commands, reactions)? Swap the webhook POST

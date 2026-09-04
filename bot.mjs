@@ -1,18 +1,20 @@
+import "dotenv/config";
 import { createClient } from "@supabase/supabase-js";
 import { readFileSync, writeFileSync } from "node:fs";
 
 // =========================================================
 // GEM INCREMENTAL — RARE ROLL DISCORD BOT
 //
-// Watches the same `global_chat_announcements` feed that powers the
-// in-game rare-roll chat and posts each new rare roll to a Discord
-// channel via a webhook. Read-only: it signs in anonymously with the
-// public anon key (exactly like the game client) and never touches the
-// service-role key or any write path.
+// Watches the game's rare-roll feed and posts each new rare roll to a
+// Discord channel via a webhook. Read-only: it calls the game's public
+// `get_rare_roll_chat_history` RPC (the same one that powers the in-game
+// rare-roll chat) with the public anon key — no login, no service-role
+// key, no write path. That RPC already returns the roller's username, so
+// the bot needs nothing else.
 //
-// No Discord bot token or gateway needed — a channel webhook is all it
-// posts to. Configure with environment variables (see .env.example) and
-// run `npm start`.
+// No Discord bot token or gateway needed — it posts to a channel webhook.
+// Configure with environment variables (see .env.example) and run
+// `npm start`.
 // =========================================================
 
 const {
@@ -31,17 +33,19 @@ if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !DISCORD_WEBHOOK_URL) {
 
 const minEffectiveRarity = Number(MIN_EFFECTIVE_RARITY) || 0;
 const pollMs = Math.max(5, Number(POLL_SECONDS) || 20) * 1000;
+// The feed RPC returns newest-first up to 200 rows; ample headroom between polls.
+const FEED_LIMIT = 200;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-  auth: { persistSession: false, autoRefreshToken: true }
+  auth: { persistSession: false }
 });
 
-// Map of mutation id -> display name, loaded once at startup.
+// Map of mutation id -> display name, loaded once at startup (best effort).
 let mutationNames = {};
 
 // -----------------------------------------------------------------
-// Cursor: the highest announcement id already posted. Persisted so a
-// restart never re-posts old rolls.
+// Cursor: the highest roll id already posted. Persisted so a restart
+// never re-posts old rolls.
 // -----------------------------------------------------------------
 function loadCursor() {
   try {
@@ -60,49 +64,30 @@ function saveCursor(lastId) {
 }
 
 // -----------------------------------------------------------------
-// Supabase reads (anonymous, read-only)
+// Supabase reads (public RPCs, anon key, read-only)
 // -----------------------------------------------------------------
-async function ensureSession() {
-  const { data } = await supabase.auth.getSession();
-  if (!data.session) {
-    const { error } = await supabase.auth.signInAnonymously();
-    if (error) throw new Error(`Anonymous sign-in failed: ${error.message}`);
-  }
-}
-
 async function loadMutationNames() {
   const { data, error } = await supabase.rpc("get_public_mutation_catalog");
   if (error || !Array.isArray(data)) return;
   mutationNames = Object.fromEntries(data.map((m) => [String(m.id), m.name || String(m.id)]));
 }
 
-async function latestAnnouncementId() {
-  const { data, error } = await supabase
-    .from("global_chat_announcements")
-    .select("id")
-    .order("id", { ascending: false })
-    .limit(1);
+async function fetchFeed() {
+  const { data, error } = await supabase.rpc("get_rare_roll_chat_history", { p_limit: FEED_LIMIT });
   if (error) throw error;
-  return data?.[0]?.id ?? 0;
+  return Array.isArray(data) ? data : [];
 }
 
-async function fetchNewRolls(sinceId) {
-  const { data, error } = await supabase
-    .from("global_chat_announcements")
-    .select("id, player_id, gem_name, rarity, effective_rarity, mutation_ids, luck_at_roll, created_at")
-    .gt("id", sinceId)
-    .order("id", { ascending: true })
-    .limit(50);
+async function latestRollId() {
+  const { data, error } = await supabase.rpc("get_rare_roll_chat_history", { p_limit: 1 });
   if (error) throw error;
-  return data ?? [];
+  return Number(data?.[0]?.id) || 0;
 }
 
-async function fetchUsernames(playerIds) {
-  const ids = [...new Set(playerIds.filter(Boolean))];
-  if (!ids.length) return {};
-  const { data, error } = await supabase.rpc("get_chat_profiles", { p_user_ids: ids });
-  if (error || !data || typeof data !== "object") return {};
-  return data;
+function newRollsSince(feed, sinceId) {
+  return feed
+    .filter((row) => Number(row.id) > sinceId)
+    .sort((a, b) => Number(a.id) - Number(b.id));
 }
 
 // -----------------------------------------------------------------
@@ -135,7 +120,8 @@ function colorFor(odds) {
   return 0x8b95a8;                            // muted
 }
 
-function buildEmbed(row, username) {
+function buildEmbed(row) {
+  const username = row.username || "Someone";
   const odds = oddsFor(row);
   const mutations = parseMutationIds(row.mutation_ids).map((id) => mutationNames[id] || id);
   const fields = [
@@ -143,8 +129,8 @@ function buildEmbed(row, username) {
     { name: "Base rarity", value: `1 in ${Number(row.rarity || 0).toLocaleString("en-US")}`, inline: true }
   ];
   if (mutations.length) fields.push({ name: "Mutations", value: mutations.join(", "), inline: false });
-  if (row.luck_at_roll != null) {
-    fields.push({ name: "Luck", value: `${Number(row.luck_at_roll).toFixed(2)}×`, inline: true });
+  if (row.base_luck != null) {
+    fields.push({ name: "Luck", value: `${Number(row.base_luck).toFixed(2)}×`, inline: true });
   }
   return {
     title: "💎 Rare roll!",
@@ -181,17 +167,14 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 let lastId = loadCursor();
 
 async function tick() {
-  await ensureSession();
-  const rolls = await fetchNewRolls(lastId);
+  const feed = await fetchFeed();
+  const rolls = newRollsSince(feed, lastId);
   if (!rolls.length) return;
-
-  const profiles = await fetchUsernames(rolls.map((r) => r.player_id));
 
   for (const row of rolls) {
     if (oddsFor(row) >= minEffectiveRarity) {
-      const username = profiles[row.player_id]?.username || "Someone";
       try {
-        await postToDiscord(buildEmbed(row, username));
+        await postToDiscord(buildEmbed(row));
         await sleep(400); // stay well under Discord's webhook rate limit
       } catch (error) {
         console.error(`Failed to post roll #${row.id}:`, error.message);
@@ -200,23 +183,22 @@ async function tick() {
         return;
       }
     }
-    lastId = row.id;
+    lastId = Number(row.id);
     saveCursor(lastId);
   }
 }
 
 async function main() {
-  await ensureSession();
   await loadMutationNames();
 
   // First run with no saved cursor: start from the newest roll so the bot
   // reports rolls going forward instead of replaying the whole backlog.
   if (!lastId) {
-    lastId = await latestAnnouncementId();
+    lastId = await latestRollId();
     saveCursor(lastId);
   }
 
-  console.log(`Rare-roll bot live. Watching from announcement #${lastId}, polling every ${pollMs / 1000}s, min odds 1 in ${minEffectiveRarity.toLocaleString("en-US")}.`);
+  console.log(`Rare-roll bot live. Watching from roll #${lastId}, polling every ${pollMs / 1000}s, min odds 1 in ${minEffectiveRarity.toLocaleString("en-US")}.`);
 
   // Run forever; a single tick failure just logs and retries next interval.
   for (;;) {
