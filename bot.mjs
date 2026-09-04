@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { createClient } from "@supabase/supabase-js";
 import { readFileSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 
 // =========================================================
 // GEM INCREMENTAL — RARE ROLL DISCORD BOT
@@ -188,7 +189,19 @@ async function tick() {
   }
 }
 
+// Many free hosts (Koyeb, Render, Railway, Fly) expect a listening port +
+// health check, and kill apps that bind nothing. Expose a tiny status page;
+// it also doubles as an uptime-ping target.
+function startHealthServer() {
+  const port = Number(process.env.PORT) || 8080;
+  createServer((req, res) => {
+    res.writeHead(200, { "content-type": "text/plain" });
+    res.end(`rare-roll bot ok — last posted roll #${lastId}\n`);
+  }).listen(port, () => console.log(`Health server listening on :${port}`));
+}
+
 async function main() {
+  startHealthServer();
   await loadMutationNames();
 
   // First run with no saved cursor: start from the newest roll so the bot

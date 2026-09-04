@@ -35,6 +35,13 @@ assert.match(bot, /oddsFor\(row\) >= minEffectiveRarity/);
 // On a failed post, the cursor must not skip the undelivered roll.
 assert.match(bot, /Failed to post roll[\s\S]*?return;/);
 
+// ── Deployability ─────────────────────────────────────────────────────
+// A health port so free hosts that require one don't kill the poller.
+assert.match(bot, /createServer\(/);
+assert.match(bot, /Number\(process\.env\.PORT\) \|\| 8080/);
+// Container-ready for the free hosts.
+assert.ok(fs.existsSync(new URL("../Dockerfile", import.meta.url)), "Dockerfile must exist for container hosts");
+
 // ── Packaging ─────────────────────────────────────────────────────────
 assert.equal(pkg.type, "module");
 assert.equal(pkg.scripts.start, "node bot.mjs");
